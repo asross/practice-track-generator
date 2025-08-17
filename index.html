@@ -22,7 +22,7 @@
     .grid { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
     .card { border: 1px solid #e4e4e7; border-radius: 12px; padding: 1rem; box-shadow: 0 1px 2px rgba(0,0,0,.05); }
     .card h3 { margin: 0 0 .5rem; font-size: 1.05rem; }
-    .btn { appearance: none; border: 1px solid #d4d4d8; background: #fff; padding: .5rem .75rem; border-radius: 8px; cursor: pointer; }
+    .btn { appearance: none; border: 1px solid #d4d4d8; background: #fff; padding: .5rem .75rem; border-radius: 8px; cursor: pointer; font-size: 16px; }
     .btn.primary { background: #111827; color: #fff; border-color: #111827; }
     .muted { color: #6b7280; font-size: .9rem; }
     .error { color: #b91c1c; }
@@ -167,10 +167,11 @@
         const cache = { xml: emphasizedXml, midiDataUrl: null, midiBase64: null };
 
         midiBtn.addEventListener('click', async () => {
-          await ensureToneUnlocked();
-          midiBtn.disabled = true;
           const prev = midiBtn.textContent;
-          midiBtn.textContent = 'Generating MIDI…';
+          midiBtn.innerText = 'Generating MIDI...';
+          midiBtn.disabled = true;
+          await ensureToneUnlocked();
+         
           try {
             await ensureMidi(cache);
             const a = document.createElement('a');
@@ -179,7 +180,6 @@
             a.href = cache.midiDataUrl;
             a.textContent = 'Download MIDI (ready)';
             midiBtn.replaceWith(a);
-            noteEl.textContent = 'MIDI created with Verovio.';
           } catch (err) {
             midiBtn.disabled = false;
             midiBtn.textContent = prev;
