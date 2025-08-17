@@ -55,17 +55,10 @@
           <option value="5">Electric Piano (5)</option>
         </select>
       </label>
-      <label>Name:
-        <input id="doubleName" type="text" value="Doubling" />
-      </label>
     </div>
   </div>
 
   <div id="results" class="grid"></div>
-
-  <footer>
-      <p>Emphasis uses explicit <code>&lt;direction-type&gt;&lt;dynamics&gt;</code> marks (<code>fff</code>/<code>p</code>) so players like MuseScore respond clearly. MIDI by <a href='https://www.verovio.org/index.xhtml'>Verovio</a>.</p>
-  </footer>
 
 <script>
 (async function () {
@@ -83,7 +76,6 @@
   const statusEl = document.getElementById('status');
   const doubleToggle = document.getElementById('doubleToggle');
   const doubleProgramSel = document.getElementById('doubleProgram');
-  const doubleNameInput = document.getElementById('doubleName');
 
   // Reuse a single Verovio toolkit
   let vrvToolkit = null;
@@ -134,7 +126,7 @@
       const originalXml = text;
       const useDoubling = !!doubleToggle.checked;
       const doubProg = parseInt(doubleProgramSel.value, 10) || 57;
-      const doubName = (doubleNameInput.value || 'Doubling').trim();
+      const doubName = 'Doubling';
 
       // Build one emphasized version per part
       for (const partEl of parts) {
