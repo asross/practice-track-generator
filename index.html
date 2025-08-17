@@ -1,0 +1,436 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Part Midi Generator</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <!-- Verovio (MusicXML → MIDI) -->
+  <script src="https://verovio-script.humdrum.org/scripts/verovio-toolkit.js"></script>
+  <!-- Tone.js (WebAudio synth/scheduler) -->
+  <script src="https://unpkg.com/tone@14.8.49/build/Tone.js"></script>
+  <!-- @tonejs/midi (MIDI parser) -->
+  <script src="https://unpkg.com/@tonejs/midi@2.0.28/build/Midi.js"></script>
+
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; padding: 2rem; }
+    h1 { margin-top: 0; }
+    .controls { display: grid; grid-template-columns: 1fr; gap: .75rem; margin: 1rem 0 1.5rem; }
+    .row { display: flex; gap: .75rem; flex-wrap: wrap; align-items: center; }
+    label { display: inline-flex; gap: .5rem; align-items: center; }
+    select, input[type="number"] { padding: .35rem .5rem; border-radius: 6px; border: 1px solid #d4d4d8; }
+    .grid { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
+    .card { border: 1px solid #e4e4e7; border-radius: 12px; padding: 1rem; box-shadow: 0 1px 2px rgba(0,0,0,.05); }
+    .card h3 { margin: 0 0 .5rem; font-size: 1.05rem; }
+    .btn { appearance: none; border: 1px solid #d4d4d8; background: #fff; padding: .5rem .75rem; border-radius: 8px; cursor: pointer; }
+    .btn.primary { background: #111827; color: #fff; border-color: #111827; }
+    .muted { color: #6b7280; font-size: .9rem; }
+    .error { color: #b91c1c; }
+    footer { margin-top: 2rem; color: #6b7280; font-size: .85rem; }
+  </style>
+</head>
+<body>
+  <h1>Part Midi Generator</h1>
+  <p class="muted">Upload a MusicXML. For each part, this makes a version where that part is louder (others softer). You can also double the emphasized part with a different instrument.</p>
+
+  <div class="controls">
+    <div class="row">
+      <input id="fileInput" type="file" accept=".xml,.musicxml" />
+      <span id="status" class="muted"></span>
+    </div>
+    <div class="row">
+      <label><input type="checkbox" checked id="doubleToggle"> Double emphasized part</label>
+      <label>Instrument:
+        <select id="doubleProgram">
+          <!-- GM programs (1–128). A small, useful subset -->
+          <option value="57">Trumpet (57)</option>
+          <option value="41">Violin (41)</option>
+          <option value="74">Flute (74)</option>
+          <option value="73">Piccolo (73)</option>
+          <option value="68">Oboe (69)</option>
+          <option value="72">Clarinet (72)</option>
+          <option value="53">Choir Aahs (53)</option>
+          <option value="89">Pad (Warm) (90)</option>
+          <option value="1">Acoustic Grand (1)</option>
+          <option value="5">Electric Piano (5)</option>
+        </select>
+      </label>
+      <label>Name:
+        <input id="doubleName" type="text" value="Doubling" />
+      </label>
+    </div>
+  </div>
+
+  <div id="results" class="grid"></div>
+
+  <footer>
+      <p>Emphasis uses explicit <code>&lt;direction-type&gt;&lt;dynamics&gt;</code> marks (<code>fff</code>/<code>p</code>) so players like MuseScore respond clearly. MIDI by <a href='https://www.verovio.org/index.xhtml'>Verovio</a>.</p>
+  </footer>
+
+<script>
+(async function () {
+  // --- Emphasis knobs ---
+  const EMPH_DYNAMIC_MARK = 'fff'; // emphasized part gets this dynamic mark at measure 1
+  const OTHER_DYNAMIC_MARK = 'p';  // others get this
+  // For redundancy, keep the older hints too:
+  const EMPH_DYNAMICS_ATTR = 110;  // <sound dynamics="...">
+  const OTHER_DYNAMICS_ATTR = 50;
+  const EMPH_VOLUME = 100;         // <midi-instrument><volume> (0–100)
+  const OTHER_VOLUME = 45;
+
+  const fileInput = document.getElementById('fileInput');
+  const results = document.getElementById('results');
+  const statusEl = document.getElementById('status');
+  const doubleToggle = document.getElementById('doubleToggle');
+  const doubleProgramSel = document.getElementById('doubleProgram');
+  const doubleNameInput = document.getElementById('doubleName');
+
+  // Reuse a single Verovio toolkit
+  let vrvToolkit = null;
+  function ensureVerovio() {
+    if (vrvToolkit) return vrvToolkit;
+    if (!window.verovio || !window.verovio.toolkit) throw new Error('Verovio not loaded');
+    vrvToolkit = new verovio.toolkit();
+    vrvToolkit.setOptions({ inputFrom: 'xml' }); // we feed MusicXML
+    return vrvToolkit;
+  }
+
+  // Keep only one active player at a time (stop previous when a new one plays)
+  let currentPlayer = null;
+
+  fileInput.addEventListener('change', async (e) => {
+    results.innerHTML = '';
+    statusEl.textContent = '';
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const nameBase = (file.name || 'score').replace(/\.(musicxml|xml|mxl)$/i, '');
+    const ext = (file.name.split('.').pop() || '').toLowerCase();
+    if (ext === 'mxl') {
+      statusEl.innerHTML = 'This demo supports uncompressed MusicXML (.xml / .musicxml). For .mxl, unzip first.';
+      return;
+    }
+
+    try {
+      const text = await file.text();
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(text, 'application/xml');
+      if (doc.querySelector('parsererror')) throw new Error('Could not parse XML');
+      const root = doc.querySelector('score-partwise, score-timewise');
+      if (!root) throw new Error('Not a MusicXML (score-partwise/timewise) document');
+
+      // Map part-id -> display name
+      const nameById = {};
+      doc.querySelectorAll('part-list > score-part').forEach(sp => {
+        const pid = sp.getAttribute('id') || '';
+        const pname = (sp.querySelector('part-name')?.textContent || '').trim();
+        nameById[pid] = pname || pid || 'Part';
+      });
+
+      const parts = Array.from(doc.querySelectorAll('part'));
+      if (!parts.length) throw new Error('No <part> elements found');
+      statusEl.textContent = `Loaded “${file.name}” — ${parts.length} part(s)`;
+
+      const originalXml = text;
+      const useDoubling = !!doubleToggle.checked;
+      const doubProg = parseInt(doubleProgramSel.value, 10) || 57;
+      const doubName = (doubleNameInput.value || 'Doubling').trim();
+
+      // Build one emphasized version per part
+      for (const partEl of parts) {
+        const pid = partEl.getAttribute('id') || '';
+        const prettyName = nameById[pid] || pid || 'Part';
+
+        const emphasizedXml = createEmphasizedCopy(originalXml, pid, {
+          double: useDoubling,
+          doubleProgram: doubProg,
+          doubleName: doubName
+        });
+
+        // Card UI
+        const card = document.createElement('div');
+        card.className = 'card';
+        card.innerHTML = `
+          <h3>${escapeHtml(prettyName)}</h3>
+          <div class="muted">Part ID: <code>${escapeHtml(pid)}</code></div>
+          <div class="row">
+            <a class="btn primary"
+               download="${escapeFile(`${nameBase}__EMPH${useDoubling ? '_DUP' : ''}_${escapeFile(prettyName)}`)}.musicxml"
+               href="${makeDownloadUrl(emphasizedXml, 'application/vnd.recordare.musicxml+xml;charset=utf-8')}">
+               Download MusicXML
+            </a>
+            <button class="btn" data-action="midi">Generate MIDI</button>
+            <button class="btn" data-action="play" style="visibility: hidden">▶︎ Play</button>
+          </div>
+          <div class="muted" style="margin-top:.5rem"></div>
+        `;
+        results.appendChild(card);
+
+        // Wire MIDI download & Play
+        const midiBtn = card.querySelector('[data-action="midi"]');
+        const playBtn = card.querySelector('[data-action="play"]');
+        const noteEl = card.querySelector('.muted:last-child');
+
+        // Cache per-card assets
+        const cache = { xml: emphasizedXml, midiDataUrl: null, midiBase64: null };
+
+        midiBtn.addEventListener('click', async () => {
+          await ensureToneUnlocked();
+          midiBtn.disabled = true;
+          const prev = midiBtn.textContent;
+          midiBtn.textContent = 'Generating MIDI…';
+          try {
+            await ensureMidi(cache);
+            const a = document.createElement('a');
+            a.className = 'btn';
+            a.download = `${nameBase}__EMPH${useDoubling ? '_DUP' : ''}_${escapeFile(prettyName)}.mid`;
+            a.href = cache.midiDataUrl;
+            a.textContent = 'Download MIDI (ready)';
+            midiBtn.replaceWith(a);
+            noteEl.textContent = 'MIDI created with Verovio.';
+          } catch (err) {
+            midiBtn.disabled = false;
+            midiBtn.textContent = prev;
+            noteEl.innerHTML = `<span class="error">MIDI generation failed: ${escapeHtml(err.message || String(err))}</span>`;
+          }
+        });
+
+        playBtn.addEventListener('click', async () => {
+          try {
+            await ensureToneUnlocked();
+            await ensureMidi(cache);
+            // Stop any existing player
+            if (currentPlayer) await stopPlayer(currentPlayer);
+            currentPlayer = await startPlayer(cache.midiBase64, playBtn, prettyName);
+            currentPlayer.onended = () => {
+              if (playBtn.isConnected) playBtn.textContent = '▶︎ Play';
+              if (currentPlayer === this) currentPlayer = null;
+            };
+            playBtn.textContent = '■ Stop';
+          } catch (err) {
+            noteEl.innerHTML = `<span class="error">Play failed: ${escapeHtml(err.message || String(err))}</span>`;
+          }
+        });
+      }
+    } catch (err) {
+      statusEl.innerHTML = `<span class="error">Error: ${escapeHtml(err.message || String(err))}</span>`;
+    }
+  });
+
+  // ---------- Core: create emphasized (and optionally doubled) copy ----------
+  function createEmphasizedCopy(xmlString, targetPartId, { double=false, doubleProgram=57, doubleName='Doubling' } = {}) {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(xmlString, 'application/xml');
+
+    // Helper: assign unique MIDI channels sequentially (1..16, skip 10)
+    function assignMidiChannels() {
+      const scoreParts = Array.from(doc.querySelectorAll('part-list > score-part'));
+      let ch = 1;
+      function nextCh() { ch = ch === 9 ? 11 : ch + 1; return ch; } // 10 (index 9) is drums; skip
+      for (const sp of scoreParts) {
+        const midiInsts = sp.querySelectorAll(':scope > midi-instrument');
+        midiInsts.forEach(mi => {
+          let chEl = mi.querySelector('midi-channel');
+          if (!chEl) { chEl = doc.createElement('midi-channel'); mi.appendChild(chEl); }
+          if (!chEl.textContent) chEl.textContent = String(nextCh());
+        });
+      }
+    }
+
+    // 1) Per-part MIDI volume + ensure midi-instrument present
+    doc.querySelectorAll('part-list > score-part').forEach(sp => {
+      const pid = sp.getAttribute('id') || '';
+      const vol = (pid === targetPartId) ? EMPH_VOLUME : OTHER_VOLUME;
+
+      const scoreInstr = sp.querySelectorAll(':scope > score-instrument');
+      if (scoreInstr.length) {
+        scoreInstr.forEach(si => {
+          const instId = si.getAttribute('id') || `${pid}-I1`;
+          let mi = sp.querySelector(`:scope > midi-instrument[id="${cssEscape(instId)}"]`);
+          if (!mi) {
+            mi = doc.createElement('midi-instrument');
+            mi.setAttribute('id', instId);
+            sp.appendChild(mi);
+          }
+          setOrCreate(mi, 'volume', String(vol));
+        });
+      } else {
+        let mi = sp.querySelector(':scope > midi-instrument');
+        if (!mi) {
+          mi = doc.createElement('midi-instrument');
+          mi.setAttribute('id', `${pid}-I1`);
+          sp.appendChild(mi);
+        }
+        setOrCreate(mi, 'volume', String(vol));
+      }
+    });
+
+    // 2) Insert explicit dynamic marks + <sound dynamics> at the first measure of each part
+    doc.querySelectorAll('part').forEach(part => {
+      const pid = part.getAttribute('id') || '';
+      const isEmph = (pid === targetPartId);
+      const dynMark = isEmph ? EMPH_DYNAMIC_MARK : OTHER_DYNAMIC_MARK;
+      const dynAttr = isEmph ? EMPH_DYNAMICS_ATTR : OTHER_DYNAMICS_ATTR;
+      const m1 = part.querySelector(':scope > measure');
+      if (m1) {
+        const direction = doc.createElement('direction');
+        const dtype = doc.createElement('direction-type');
+        const dynamics = doc.createElement('dynamics');
+        dynamics.appendChild(doc.createElement(dynMark)); // e.g., <fff/> or <p/>
+        dtype.appendChild(dynamics);
+        direction.appendChild(dtype);
+        const sound = doc.createElement('sound');
+        sound.setAttribute('dynamics', String(dynAttr));
+        direction.appendChild(sound);
+        m1.insertBefore(direction, m1.firstChild);
+      }
+    });
+
+    // 3) Optional doubling: clone the emphasized part as a new part with a different instrument
+    if (double) {
+      const originalPart = doc.querySelector(`part[id="${cssAttr(targetPartId)}"]`);
+      if (originalPart) {
+        // Find the matching score-part for metadata
+        const origScorePart = doc.querySelector(`part-list > score-part[id="${cssAttr(targetPartId)}"]`);
+        const partList = doc.querySelector('part-list');
+
+        // Create new score-part entry
+        const dupId = `${targetPartId}_DUP`;
+        const scorePartDup = doc.createElement('score-part');
+        scorePartDup.setAttribute('id', dupId);
+        // Part name
+        const pn = doc.createElement('part-name');
+        pn.textContent = (origScorePart?.querySelector('part-name')?.textContent?.trim() || targetPartId) + ` (${doubleName})`;
+        scorePartDup.appendChild(pn);
+        // Score-instrument + midi-instrument with program
+        const si = doc.createElement('score-instrument');
+        si.setAttribute('id', `${dupId}-I1`);
+        const iname = doc.createElement('instrument-name');
+        iname.textContent = doubleName;
+        si.appendChild(iname);
+        scorePartDup.appendChild(si);
+
+        const mi = doc.createElement('midi-instrument');
+        mi.setAttribute('id', `${dupId}-I1`);
+        setOrCreate(mi, 'midi-program', String(doubleProgram)); // GM program
+        setOrCreate(mi, 'volume', String(EMPH_VOLUME));
+        scorePartDup.appendChild(mi);
+
+        partList.appendChild(scorePartDup);
+
+        // Clone the part
+        const dupPart = originalPart.cloneNode(true);
+        dupPart.setAttribute('id', dupId);
+
+        // Update any <note><instrument id="..."/> references to point to dup instrument
+        dupPart.querySelectorAll('note > instrument[id]').forEach(inst => {
+          inst.setAttribute('id', `${dupId}-I1`);
+        });
+
+        // Make sure the doubled part also starts loud (insert dynamics at its first measure)
+        const m1 = dupPart.querySelector(':scope > measure');
+        if (m1) {
+          const direction = doc.createElement('direction');
+          const dtype = doc.createElement('direction-type');
+          const dynamics = doc.createElement('dynamics');
+          dynamics.appendChild(doc.createElement(EMPH_DYNAMIC_MARK)); // loud
+          dtype.appendChild(dynamics);
+          direction.appendChild(dtype);
+          const sound = doc.createElement('sound');
+          sound.setAttribute('dynamics', String(EMPH_DYNAMICS_ATTR));
+          direction.appendChild(sound);
+          m1.insertBefore(direction, m1.firstChild);
+        }
+
+        // Insert dup part right after the original in the score
+        originalPart.insertAdjacentElement('afterend', dupPart);
+      }
+    }
+
+    // 4) Assign MIDI channels so parts are independent (helps some players)
+    assignMidiChannels();
+
+    const serializer = new XMLSerializer();
+    return serializer.serializeToString(doc);
+  }
+
+  // ---------- MIDI generation via Verovio ----------
+  async function ensureMidi(cache) {
+    if (cache.midiDataUrl && cache.midiBase64) return cache;
+    const vrv = ensureVerovio();
+    const ok = vrv.loadData(cache.xml);
+    if (!ok) throw new Error('Verovio loadData() failed for this MusicXML');
+    const base64 = vrv.renderToMIDI();
+    if (!base64) throw new Error('Verovio renderToMIDI() returned empty');
+    cache.midiBase64 = base64;
+    cache.midiDataUrl = 'data:audio/midi;base64,' + base64;
+    return cache;
+  }
+
+  // ---------- Playback (Tone.js + @tonejs/midi) ----------
+  async function ensureToneUnlocked() {
+    if (Tone.context.state !== 'running') await Tone.start();
+  }
+  function base64ToArrayBuffer(b64) {
+    const bin = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return bytes.buffer;
+  }
+  async function startPlayer(midiBase64, playBtn, labelForLog) {
+    if (!window.Midi) throw new Error('@tonejs/midi not loaded');
+    const midi = new Midi(base64ToArrayBuffer(midiBase64));
+
+    const gain = new Tone.Gain(0.9).toDestination();
+    const synth = new Tone.PolySynth(Tone.Synth, {
+      oscillator: { type: 'sine' },
+      envelope: { attack: 0.002, decay: 0.1, sustain: 0.35, release: 0.8 }
+    }).connect(gain);
+
+    // Tempo
+    const firstTempo = (midi.header.tempos && midi.header.tempos[0]?.bpm) || 120;
+    Tone.Transport.bpm.value = firstTempo;
+
+    // Events
+    const events = [];
+    let endTime = 0;
+    midi.tracks.forEach(tr => {
+      tr.notes.forEach(n => {
+        events.push({ time: n.time, name: n.name, duration: n.duration, velocity: n.velocity });
+        endTime = Math.max(endTime, n.time + n.duration);
+      });
+    });
+
+    const part = new Tone.Part((time, ev) => {
+      synth.triggerAttackRelease(ev.name, ev.duration, time, ev.velocity);
+    }, events).start(0);
+
+    Tone.Transport.seconds = 0;
+    Tone.Transport.start("+0.05");
+    const stopTimer = setTimeout(stopNow, Math.ceil((endTime + 0.1) * 1000));
+
+    async function stopNow() {
+      clearTimeout(stopTimer);
+      Tone.Transport.stop(); Tone.Transport.cancel();
+      part.stop(); part.dispose(); synth.dispose(); gain.dispose();
+      if (playBtn && playBtn.isConnected) playBtn.textContent = '▶︎ Play';
+      if (player.onended) player.onended();
+    }
+
+    const player = { stop: stopNow, onended: null };
+    return player;
+  }
+  async function stopPlayer(player) { try { await player.stop(); } catch {} currentPlayer = null; }
+
+  // ---------- Tiny utils ----------
+  function setOrCreate(parent, tag, text) { let el = parent.querySelector(tag); if (!el) { el = parent.ownerDocument.createElement(tag); parent.appendChild(el); } el.textContent = text; return el; }
+  function makeDownloadUrl(text, mime) { const blob = new Blob([text], { type: mime }); return URL.createObjectURL(blob); }
+  function escapeFile(s) { return s.replace(/[^\w\-]+/g, '_'); }
+  function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+  function cssEscape(id) { return id.replace(/(["\\#.:])/g, "\\$1"); }
+  function cssAttr(v) { return String(v).replace(/(["\\#.:])/g, "\\$1"); }
+})();
+</script>
+</body>
+</html>
+
