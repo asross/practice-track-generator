@@ -166,8 +166,8 @@
         // ─────────────────────────────────────────────────────────────────────────────
         // Emphasis / mix constants
         // ─────────────────────────────────────────────────────────────────────────────
-        const EMPH_DYNAMIC_MARK = 'fff'; // emphasized part gets this dynamic mark at measure 1
-        const OTHER_DYNAMIC_MARK = 'p'; // others get this
+        const EMPH_DYNAMIC_MARK = 'mf'; // emphasized part gets this dynamic mark at measure 1
+        const OTHER_DYNAMIC_MARK = 'mp'; // others get this
         // Redundant hints for some renderers
         const EMPH_DYNAMICS_ATTR = 110; // <sound dynamics="...">
         const OTHER_DYNAMICS_ATTR = 50;
@@ -357,6 +357,90 @@
           return card;
         }
 
+        // Normalize tenor parts that used 8vb treble so they play at written pitch in MuseScore.
+        // - Converts G/2 clef with <clef-octave-change>-1 to plain treble
+        // - Removes octave-down <transpose> (-12 / octave-change -1) on those staves
+        // - Removes <octave-shift type="down" size="8"> directions on those staves
+        function normalizeTenorPlayback(doc) {
+          const parts = doc.querySelectorAll('score-partwise > part');
+          parts.forEach(part => {
+            // Which staves in this part had tenor 8vb?
+            const tenorStaves = new Set();
+
+            // Pass 1: fix clefs and record affected staves
+            part.querySelectorAll(':scope > measure > attributes > clef').forEach(clef => {
+              const sign = clef.querySelector('sign')?.textContent?.trim();
+              const line = clef.querySelector('line')?.textContent?.trim();
+              const octEl = clef.querySelector('clef-octave-change');
+              const oct = octEl?.textContent?.trim();
+              if (sign === 'G' && line === '2' && oct === '-1') {
+                const staffNo = clef.querySelector('number')?.textContent?.trim() || '1';
+                tenorStaves.add(staffNo);
+                // turn into plain treble
+                octEl.remove();
+                // ensure sign/line present
+                let s = clef.querySelector('sign'); if (!s) { s = doc.createElement('sign'); clef.appendChild(s); }
+                let l = clef.querySelector('line'); if (!l) { l = doc.createElement('line'); clef.appendChild(l); }
+                s.textContent = 'G'; l.textContent = '2';
+              }
+            });
+
+            if (!tenorStaves.size) return; // nothing to do for this part
+
+            // Helper: does this element target one of the tenor staves (or no staff specified)?
+            const targetsTenorStaff = (el) => {
+              const st = el.closest('measure')?.querySelector(':scope > * > staff, :scope > staff') // direction/print sometimes carry <staff>
+                     || el.querySelector('staff');
+              const num = st?.textContent?.trim();
+              // If staff is specified, require it; if not, assume it applies to all staves in the measure.
+              return !num || tenorStaves.has(num);
+            };
+
+            // Pass 2: remove octave-down transposition on those staves
+            part.querySelectorAll(':scope > measure > attributes').forEach(attrs => {
+              const tr = attrs.querySelector(':scope > transpose');
+              if (!tr) return;
+
+              // Only scrub if this attributes block applies to a tenor staff (or to all)
+              // Try to detect staff scoping via sibling <clef number="..."> or <staff-details number="...">
+              const scopedStaffs = new Set(
+                Array.from(attrs.querySelectorAll(':scope > clef > number, :scope > staff-details > staff-lines')).map(n => n.textContent?.trim())
+              );
+
+              const appliesToTenor = (!scopedStaffs.size) ||
+                Array.from(scopedStaffs).some(n => tenorStaves.has(n || '1'));
+
+              if (!appliesToTenor) return;
+
+              const oct = parseInt(tr.querySelector('octave-change')?.textContent || '0', 10);
+              const chrom = parseInt(tr.querySelector('chromatic')?.textContent || '0', 10);
+              if (oct <= -1 || chrom <= -12) {
+                tr.remove(); // scrub the octave-down transpose
+              }
+            });
+
+            // Pass 3: remove any octave-shift 8vb directions on those staves
+            part.querySelectorAll(':scope > measure > direction').forEach(dir => {
+              const osh = dir.querySelector('direction-type > octave-shift');
+              if (!osh) return;
+              const type = osh.getAttribute('type') || ''; // start/stop/continue/up/down
+              const size = osh.getAttribute('size') || '';
+              if ((/down/i.test(type) || /8vb/i.test(osh.textContent || '')) && String(size) === '8') {
+                // Check staff targeting if present
+                const staffEl = dir.querySelector(':scope > staff');
+                const staffNo = staffEl?.textContent?.trim();
+                if (!staffNo || tenorStaves.has(staffNo)) {
+                  osh.remove();
+                  // If the direction is now empty, drop it
+                  if (!dir.querySelector('direction-type') && !dir.querySelector('sound') && !dir.querySelector('offset')) {
+                    dir.remove();
+                  }
+                }
+              }
+            });
+          });
+        }
+
         // ─────────────────────────────────────────────────────────────────────────────
         // Core: create emphasized (and optionally doubled) copy
         // ─────────────────────────────────────────────────────────────────────────────
@@ -485,6 +569,8 @@
 
           // 4) Assign MIDI channels so parts are independent (helps some players)
           assignMidiChannels(doc);
+
+          normalizeTenorPlayback(doc);
 
           const serializer = new XMLSerializer();
           return serializer.serializeToString(doc);
