@@ -2,15 +2,22 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>Part MIDI Generator</title>
+  <title>Part Track Generator</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
 
   <!-- Verovio (MusicXML → MIDI) -->
-  <script src="https://verovio-script.humdrum.org/scripts/verovio-toolkit.js"></script>
+  <script src="https://www.verovio.org/javascript/latest/verovio-toolkit-wasm.js"></script>
+
+  <script src="https://cdn.jsdelivr.net/npm/soundfont-player@0.12.0/dist/soundfont-player.js"></script>
+
+  <!-- lamejs (MP3 encoder) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/lamejs/1.2.1/lame.min.js"></script>
+
   <!-- Tone.js (WebAudio synth/scheduler) -->
   <script src="https://unpkg.com/tone@14.8.49/build/Tone.js"></script>
   <!-- @tonejs/midi (MIDI parser) -->
   <script src="https://unpkg.com/@tonejs/midi@2.0.28/build/Midi.js"></script>
+
 
   <style>
     body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; padding: 2rem; }
@@ -30,31 +37,13 @@
   </style>
 </head>
 <body>
-  <h1>Part MIDI Generator</h1>
-  <p class="muted">Upload <code>.musicxml</code> file. For each part, this makes a version where that part is louder. You can also double the emphasized part with another instrument.</p>
+  <h1>Part Track Generator</h1>
+  <p class="muted">Upload <code>.musicxml</code> file. For each part, this makes a version where that part is louder and doubled with a trumpet sound.</p>
 
   <div class="controls">
     <div class="row">
       <input id="fileInput" type="file" accept=".xml,.musicxml" />
       <span id="status" class="muted"></span>
-    </div>
-    <div class="row">
-      <label><input type="checkbox" checked id="doubleToggle"> Double emphasized part</label>
-      <label>Instrument:
-        <select id="doubleProgram">
-          <!-- GM programs (1–128). A small, useful subset -->
-          <option value="57">Trumpet (57)</option>
-          <option value="41">Violin (41)</option>
-          <option value="74">Flute (74)</option>
-          <option value="73">Piccolo (73)</option>
-          <option value="68">Oboe (69)</option>
-          <option value="72">Clarinet (72)</option>
-          <option value="53">Choir Aahs (53)</option>
-          <option value="89">Pad (Warm) (90)</option>
-          <option value="1">Acoustic Grand (1)</option>
-          <option value="5">Electric Piano (5)</option>
-        </select>
-      </label>
     </div>
   </div>
 
@@ -74,8 +63,6 @@
   const fileInput = document.getElementById('fileInput');
   const results = document.getElementById('results');
   const statusEl = document.getElementById('status');
-  const doubleToggle = document.getElementById('doubleToggle');
-  const doubleProgramSel = document.getElementById('doubleProgram');
 
   // Reuse a single Verovio toolkit
   let vrvToolkit = null;
@@ -124,8 +111,8 @@
       statusEl.textContent = `Loaded “${file.name}” — ${parts.length} part(s)`;
 
       const originalXml = text;
-      const useDoubling = !!doubleToggle.checked;
-      const doubProg = parseInt(doubleProgramSel.value, 10) || 57;
+      const useDoubling = true;
+      const doubProg = 57;
       const doubName = 'Doubling';
 
       // Build one emphasized version per part
@@ -152,7 +139,7 @@
                Download MusicXML
             </a>
             <button class="btn" data-action="midi">Generate MIDI</button>
-            <button class="btn" data-action="play" style="visibility: hidden">▶︎ Play</button>
+            <button class="btn" data-action="mp3">Generate MP3</button>
           </div>
           <div class="muted" style="margin-top:.5rem"></div>
         `;
@@ -160,7 +147,7 @@
 
         // Wire MIDI download & Play
         const midiBtn = card.querySelector('[data-action="midi"]');
-        const playBtn = card.querySelector('[data-action="play"]');
+        const mp3Btn = card.querySelector('[data-action="mp3"]');
         const noteEl = card.querySelector('.muted:last-child');
 
         // Cache per-card assets
@@ -187,20 +174,23 @@
           }
         });
 
-        playBtn.addEventListener('click', async () => {
+        mp3Btn.addEventListener('click', async () => {
+          mp3Btn.innerText = 'Generating MP3...';
+          mp3Btn.disabled = true;
+          await ensureToneUnlocked();
+
           try {
-            await ensureToneUnlocked();
             await ensureMidi(cache);
-            // Stop any existing player
-            if (currentPlayer) await stopPlayer(currentPlayer);
-            currentPlayer = await startPlayer(cache.midiBase64, playBtn, prettyName);
-            currentPlayer.onended = () => {
-              if (playBtn.isConnected) playBtn.textContent = '▶︎ Play';
-              if (currentPlayer === this) currentPlayer = null;
-            };
-            playBtn.textContent = '■ Stop';
+            const midiData = new Midi(base64ToArrayBuffer(cache.midiBase64));
+            const mp3DataUrl = await createMp3DataUrl(midiData);
+            const a = document.createElement('a');
+            a.className = 'btn';
+            a.download = `${nameBase}__EMPH${useDoubling ? '_DUP' : ''}_${escapeFile(prettyName)}.mp3`;
+            a.href = mp3DataUrl;
+            a.textContent = 'Download MP3 (ready)';
+            mp3Btn.replaceWith(a);
           } catch (err) {
-            noteEl.innerHTML = `<span class="error">Play failed: ${escapeHtml(err.message || String(err))}</span>`;
+            noteEl.innerHTML = `<span class="error">MP3 generation failed: ${escapeHtml(err.message || String(err))}</span>`;
           }
         });
       }
@@ -359,60 +349,16 @@
     return cache;
   }
 
-  // ---------- Playback (Tone.js + @tonejs/midi) ----------
   async function ensureToneUnlocked() {
     if (Tone.context.state !== 'running') await Tone.start();
   }
+
   function base64ToArrayBuffer(b64) {
     const bin = atob(b64);
     const bytes = new Uint8Array(bin.length);
     for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
     return bytes.buffer;
   }
-  async function startPlayer(midiBase64, playBtn, labelForLog) {
-    if (!window.Midi) throw new Error('@tonejs/midi not loaded');
-    const midi = new Midi(base64ToArrayBuffer(midiBase64));
-
-    const gain = new Tone.Gain(0.9).toDestination();
-    const synth = new Tone.PolySynth(Tone.Synth, {
-      oscillator: { type: 'sine' },
-      envelope: { attack: 0.002, decay: 0.1, sustain: 0.35, release: 0.8 }
-    }).connect(gain);
-
-    // Tempo
-    const firstTempo = (midi.header.tempos && midi.header.tempos[0]?.bpm) || 120;
-    Tone.Transport.bpm.value = firstTempo;
-
-    // Events
-    const events = [];
-    let endTime = 0;
-    midi.tracks.forEach(tr => {
-      tr.notes.forEach(n => {
-        events.push({ time: n.time, name: n.name, duration: n.duration, velocity: n.velocity });
-        endTime = Math.max(endTime, n.time + n.duration);
-      });
-    });
-
-    const part = new Tone.Part((time, ev) => {
-      synth.triggerAttackRelease(ev.name, ev.duration, time, ev.velocity);
-    }, events).start(0);
-
-    Tone.Transport.seconds = 0;
-    Tone.Transport.start("+0.05");
-    const stopTimer = setTimeout(stopNow, Math.ceil((endTime + 0.1) * 1000));
-
-    async function stopNow() {
-      clearTimeout(stopTimer);
-      Tone.Transport.stop(); Tone.Transport.cancel();
-      part.stop(); part.dispose(); synth.dispose(); gain.dispose();
-      if (playBtn && playBtn.isConnected) playBtn.textContent = '▶︎ Play';
-      if (player.onended) player.onended();
-    }
-
-    const player = { stop: stopNow, onended: null };
-    return player;
-  }
-  async function stopPlayer(player) { try { await player.stop(); } catch {} currentPlayer = null; }
 
   // ---------- Tiny utils ----------
   function setOrCreate(parent, tag, text) { let el = parent.querySelector(tag); if (!el) { el = parent.ownerDocument.createElement(tag); parent.appendChild(el); } el.textContent = text; return el; }
@@ -421,6 +367,113 @@
   function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
   function cssEscape(id) { return id.replace(/(["\\#.:])/g, "\\$1"); }
   function cssAttr(v) { return String(v).replace(/(["\\#.:])/g, "\\$1"); }
+
+async function createMp3DataUrl(midiData) {
+    const sampleRate = 44100;
+    const kbps = 256;
+
+    const tailSeconds = 2.0;
+    const durationSec = midiData.duration + tailSeconds;
+    const totalFrames = Math.ceil(durationSec * sampleRate);
+
+    const offline = new OfflineAudioContext(2, totalFrames, sampleRate);
+
+    const instCache = {
+      piano: await loadSfInstrument(offline, 'acoustic_grand_piano'),
+      trumpet: await loadSfInstrument(offline, 'trumpet'),
+    };
+
+    const ROLE_GAIN = { piano: 0.95, trumpet: 0.95, drums: 0.9, other: 0.0 };
+
+    midiData.tracks.forEach((track) => {
+      const role = classifyTrack(track);
+      const inst = instCache[role];  // undefined for 'other'
+      const baseGain = ROLE_GAIN[role] ?? 0.0;
+
+      // Skip non-piano/non-trumpet pitched tracks (but keep drums)
+      if (!inst || baseGain <= 0) return;
+
+      const trackGain = (track.volume ?? 1.0) * baseGain;
+
+      track.notes.forEach((n) => {
+        const when = n.time;
+        const dur = Math.max(0.01, n.duration);
+        const vel = (n.velocity ?? 0.8) * trackGain;
+        if (dur <= 0) return;
+        inst.play(n.midi, when, { duration: dur, gain: vel });
+      });
+    });
+
+    const rendered = await offline.startRendering();
+
+    // Float32 -> Int16
+    const f32ToI16 = (f32) => {
+      const out = new Int16Array(f32.length);
+      for (let i = 0; i < f32.length; i++) {
+        let s = Math.max(-1, Math.min(1, f32[i]));
+        out[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+      }
+      return out;
+    };
+
+    const left16 = f32ToI16(rendered.getChannelData(0));
+    const right16 = f32ToI16(rendered.getChannelData(1));
+
+    const encoder = new window.lamejs.Mp3Encoder(2, sampleRate, kbps);
+    const mp3Data = [];
+    const block = 1152;
+
+    for (let i = 0; i < left16.length; i += block) {
+      const buf = encoder.encodeBuffer(
+        left16.subarray(i, i + block),
+        right16.subarray(i, i + block)
+      );
+      if (buf.length) mp3Data.push(buf);
+    }
+    const end = encoder.flush();
+    if (end.length) mp3Data.push(end);
+
+    const blob = new Blob(mp3Data, { type: 'audio/mpeg' });
+    const url = URL.createObjectURL(blob);
+    return url;
+}
+
+function classifyTrack(track) {
+  const nameBits = [
+    track.name,
+    track.instrument?.name,
+    track.instrument?.family
+  ].filter(Boolean).join(' ').toLowerCase();
+
+  const prog = Number.isFinite(track.instrument?.number) ? track.instrument.number : null;
+  const channel = track.channel; // GM drums are channel 9 (0-based)
+  const isDrums = track.percussion || channel === 9;
+
+  if (isDrums) return 'drums';
+
+  // Program-based hints (GM numbers are 0-based in tonejs/midi):
+  // Pianos 0..7, Trumpet 56
+  const isPianoProg = prog !== null && prog >= 0 && prog <= 7;
+  const isTrumpetProg = prog === 56;
+
+  // Name-based hints (MuseScore often uses labels like "Piano", "Pno.", "Trumpet in Bb")
+  const pianoName = /\b(piano|pno\.?|grand|keys?)\b/i.test(nameBits);
+  const trumpetName = /\b(trumpet|tpt\.?)\b/i.test(nameBits);
+
+  if (isPianoProg || pianoName) return 'piano';
+  if (isTrumpetProg || trumpetName) return 'trumpet';
+
+  return 'other';
+}
+
+// Create (or fetch) a SoundFont instrument by name
+async function loadSfInstrument(ctx, name) {
+  // Valid GM names for FluidR3_GM include 'acoustic_grand_piano', 'trumpet', 'percussion'
+  return window.Soundfont.instrument(ctx, name, {
+    soundfont: 'FluidR3_GM',
+    gain: 0.9
+  });
+}
 })();
 </script>
 </body>
