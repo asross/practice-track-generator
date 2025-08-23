@@ -1,481 +1,687 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <title>Part Track Generator</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Part Track Generator</title>
 
-  <!-- Verovio (MusicXML → MIDI) -->
-  <script src="https://www.verovio.org/javascript/latest/verovio-toolkit-wasm.js"></script>
+    <!-- Verovio (MusicXML → MIDI) -->
+    <script src="https://www.verovio.org/javascript/latest/verovio-toolkit-wasm.js"></script>
 
-  <script src="https://cdn.jsdelivr.net/npm/soundfont-player@0.12.0/dist/soundfont-player.js"></script>
+    <!-- SoundFont player (WebAudio) -->
+    <script src="https://cdn.jsdelivr.net/npm/soundfont-player@0.12.0/dist/soundfont-player.js"></script>
 
-  <!-- lamejs (MP3 encoder) -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/lamejs/1.2.1/lame.min.js"></script>
+    <!-- lamejs (MP3 encoder) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/lamejs/1.2.1/lame.min.js"></script>
 
-  <!-- Tone.js (WebAudio synth/scheduler) -->
-  <script src="https://unpkg.com/tone@14.8.49/build/Tone.js"></script>
-  <!-- @tonejs/midi (MIDI parser) -->
-  <script src="https://unpkg.com/@tonejs/midi@2.0.28/build/Midi.js"></script>
+    <!-- Tone.js (used to unlock/resume AudioContext on user gesture) -->
+    <script src="https://unpkg.com/tone@14.8.49/build/Tone.js"></script>
 
+    <!-- @tonejs/midi (MIDI parser) -->
+    <script src="https://unpkg.com/@tonejs/midi@2.0.28/build/Midi.js"></script>
 
-  <style>
-    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; padding: 2rem; }
-    h1 { margin-top: 0; }
-    .controls { display: grid; grid-template-columns: 1fr; gap: .75rem; margin: 1rem 0 1.5rem; }
-    .row { display: flex; gap: .75rem; flex-wrap: wrap; align-items: center; }
-    label { display: inline-flex; gap: .5rem; align-items: center; }
-    select, input[type="number"] { padding: .35rem .5rem; border-radius: 6px; border: 1px solid #d4d4d8; }
-    .grid { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
-    .card { border: 1px solid #e4e4e7; border-radius: 12px; padding: 1rem; box-shadow: 0 1px 2px rgba(0,0,0,.05); }
-    .card h3 { margin: 0 0 .5rem; font-size: 1.05rem; }
-    .btn { appearance: none; border: 1px solid #d4d4d8; background: #fff; padding: .5rem .75rem; border-radius: 8px; cursor: pointer; font-size: 16px; }
-    .btn.primary { background: #111827; color: #fff; border-color: #111827; }
-    .muted { color: #6b7280; font-size: .9rem; }
-    .error { color: #b91c1c; }
-    footer { margin-top: 2rem; color: #6b7280; font-size: .85rem; }
-  </style>
-</head>
-<body>
-  <h1>Part Track Generator</h1>
-  <p class="muted">Upload <code>.musicxml</code> file. For each part, this makes a version where that part is louder and doubled with a trumpet sound.</p>
+    <style>
+      :root {
+        --bg: #ffffff;
+        --fg: #111827;
+        --muted: #6b7280;
+        --line: #e4e4e7;
+        --line-2: #d4d4d8;
+        --radius: 12px;
+        --shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+        --space-1: 0.5rem;
+        --space-2: 0.75rem;
+        --space-3: 1rem;
+      }
 
-  <div class="controls">
-    <div class="row">
-      <input id="fileInput" type="file" accept=".musicxml, .xml" />
-      <span id="status" class="muted"></span>
+      html,
+      body {
+        height: 100%;
+      }
+
+      body {
+        font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+        color: var(--fg);
+        background: var(--bg);
+        padding: 2rem;
+        line-height: 1.5;
+      }
+
+      h1 {
+        margin: 0 0 var(--space-3);
+        line-height: 1.2;
+      }
+
+      .muted {
+        color: var(--muted);
+        font-size: 0.92rem;
+      }
+
+      .error {
+        color: #b91c1c;
+      }
+
+      .controls {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: var(--space-2);
+        margin: 1rem 0 1.5rem;
+      }
+
+      .row {
+        display: flex;
+        gap: var(--space-2);
+        flex-wrap: wrap;
+        align-items: center;
+      }
+
+      label {
+        display: inline-flex;
+        gap: var(--space-1);
+        align-items: center;
+      }
+
+      input[type="file"],
+      select,
+      input[type="number"] {
+        padding: 0.35rem 0.5rem;
+        border-radius: 6px;
+        border: 1px solid var(--line-2);
+        font: inherit;
+      }
+
+      .grid {
+        display: grid;
+        gap: 1rem;
+        grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+      }
+
+      .card {
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        padding: var(--space-3);
+        box-shadow: var(--shadow);
+      }
+
+      .card h3 {
+        margin: 0 0 0.25rem;
+        font-size: 1.05rem;
+      }
+
+      .btn {
+        appearance: none;
+        border: 1px solid var(--line-2);
+        background: #fff;
+        padding: 0.5rem 0.75rem;
+        border-radius: 8px;
+        cursor: pointer;
+        font-size: 16px;
+      }
+
+      .btn[disabled] {
+        opacity: 0.6;
+        cursor: not-allowed;
+      }
+
+      .btn.primary {
+        background: #111827;
+        color: #fff;
+        border-color: #111827;
+      }
+
+      footer {
+        margin-top: 2rem;
+        color: var(--muted);
+        font-size: 0.85rem;
+      }
+
+      /* Improve focus visibility */
+      :is(a, button, input):focus-visible {
+        outline: 2px solid #2563eb;
+        outline-offset: 2px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Part Track Generator</h1>
+    <p class="muted">
+      Upload a <code>.musicxml</code> file. For each part, this makes a version where
+      that part is louder and doubled with a trumpet sound.
+    </p>
+
+    <div class="controls">
+      <div class="row">
+        <label for="fileInput">Score file:</label>
+        <input id="fileInput" type="file" accept=".musicxml,.xml" />
+        <span id="status" class="muted" aria-live="polite"></span>
+      </div>
     </div>
-  </div>
 
-  <div id="results" class="grid"></div>
+    <div id="results" class="grid" aria-live="polite"></div>
 
-<script>
-(async function () {
-  // --- Emphasis knobs ---
-  const EMPH_DYNAMIC_MARK = 'fff'; // emphasized part gets this dynamic mark at measure 1
-  const OTHER_DYNAMIC_MARK = 'p';  // others get this
-  // For redundancy, keep the older hints too:
-  const EMPH_DYNAMICS_ATTR = 110;  // <sound dynamics="...">
-  const OTHER_DYNAMICS_ATTR = 50;
-  const EMPH_VOLUME = 100;         // <midi-instrument><volume> (0–100)
-  const OTHER_VOLUME = 45;
+    <script>
+      (function () {
+        'use strict';
 
-  const fileInput = document.getElementById('fileInput');
-  const results = document.getElementById('results');
-  const statusEl = document.getElementById('status');
+        // ─────────────────────────────────────────────────────────────────────────────
+        // Emphasis / mix constants
+        // ─────────────────────────────────────────────────────────────────────────────
+        const EMPH_DYNAMIC_MARK = 'fff'; // emphasized part gets this dynamic mark at measure 1
+        const OTHER_DYNAMIC_MARK = 'p'; // others get this
+        // Redundant hints for some renderers
+        const EMPH_DYNAMICS_ATTR = 110; // <sound dynamics="...">
+        const OTHER_DYNAMICS_ATTR = 50;
+        const EMPH_VOLUME = 100; // <midi-instrument><volume> (0–100)
+        const OTHER_VOLUME = 45;
 
-  // Reuse a single Verovio toolkit
-  let vrvToolkit = null;
-  function ensureVerovio() {
-    if (vrvToolkit) return vrvToolkit;
-    if (!window.verovio || !window.verovio.toolkit) throw new Error('Verovio not loaded');
-    vrvToolkit = new verovio.toolkit();
-    vrvToolkit.setOptions({ inputFrom: 'xml' }); // we feed MusicXML
-    return vrvToolkit;
-  }
+        // Doubling settings
+        const DOUBLING_ENABLED = true;
+        const DOUBLING_PROGRAM = 57; // GM trumpet (0-based 56 => 57 here for MusicXML)
+        const DOUBLING_NAME = 'Doubling';
 
-  // Keep only one active player at a time (stop previous when a new one plays)
-  let currentPlayer = null;
+        // ─────────────────────────────────────────────────────────────────────────────
+        // Elements
+        // ─────────────────────────────────────────────────────────────────────────────
+        const fileInput = document.getElementById('fileInput');
+        const resultsEl = document.getElementById('results');
+        const statusEl = document.getElementById('status');
 
-  fileInput.addEventListener('change', async (e) => {
-    results.innerHTML = '';
-    statusEl.textContent = '';
-    const file = e.target.files?.[0];
-    if (!file) return;
+        // Keep only one active player at a time (future use if adding playback)
+        let currentPlayer = null; // eslint-disable-line no-unused-vars
 
-    const nameBase = (file.name || 'score').replace(/\.(musicxml|xml|mxl)$/i, '');
-    const ext = (file.name.split('.').pop() || '').toLowerCase();
-    if (ext === 'mxl') {
-      statusEl.innerHTML = 'This demo supports uncompressed MusicXML (.xml / .musicxml). For .mxl, unzip first.';
-      return;
-    }
-
-    try {
-      const text = await file.text();
-      const parser = new DOMParser();
-      const doc = parser.parseFromString(text, 'application/xml');
-      if (doc.querySelector('parsererror')) throw new Error('Could not parse XML');
-      const root = doc.querySelector('score-partwise, score-timewise');
-      if (!root) throw new Error('Not a MusicXML (score-partwise/timewise) document');
-
-      // Map part-id -> display name
-      const nameById = {};
-      doc.querySelectorAll('part-list > score-part').forEach(sp => {
-        const pid = sp.getAttribute('id') || '';
-        const pname = (sp.querySelector('part-name')?.textContent || '').trim();
-        nameById[pid] = pname || pid || 'Part';
-      });
-
-      const parts = Array.from(doc.querySelectorAll('part'));
-      if (!parts.length) throw new Error('No <part> elements found');
-      statusEl.textContent = `Loaded “${file.name}” — ${parts.length} part(s)`;
-
-      const originalXml = text;
-      const useDoubling = true;
-      const doubProg = 57;
-      const doubName = 'Doubling';
-
-      // Build one emphasized version per part
-      for (const partEl of parts) {
-        const pid = partEl.getAttribute('id') || '';
-        const prettyName = nameById[pid] || pid || 'Part';
-
-        const emphasizedXml = createEmphasizedCopy(originalXml, pid, {
-          double: useDoubling,
-          doubleProgram: doubProg,
-          doubleName: doubName
-        });
-
-        // Card UI
-        const card = document.createElement('div');
-        card.className = 'card';
-        card.innerHTML = `
-          <h3>${escapeHtml(prettyName)}</h3>
-          <div class="muted">Part ID: <code>${escapeHtml(pid)}</code></div>
-          <div class="row">
-            <a class="btn primary"
-               download="${escapeFile(`${nameBase}__EMPH${useDoubling ? '_DUP' : ''}_${escapeFile(prettyName)}`)}.musicxml"
-               href="${makeDownloadUrl(emphasizedXml, 'application/vnd.recordare.musicxml+xml;charset=utf-8')}">
-               Download MusicXML
-            </a>
-            <button class="btn" data-action="midi">Generate MIDI</button>
-            <button class="btn" data-action="mp3">Generate MP3</button>
-          </div>
-          <div class="muted" style="margin-top:.5rem"></div>
-        `;
-        results.appendChild(card);
-
-        // Wire MIDI download & Play
-        const midiBtn = card.querySelector('[data-action="midi"]');
-        const mp3Btn = card.querySelector('[data-action="mp3"]');
-        const noteEl = card.querySelector('.muted:last-child');
-
-        // Cache per-card assets
-        const cache = { xml: emphasizedXml, midiDataUrl: null, midiBase64: null };
-
-        midiBtn.addEventListener('click', async () => {
-          const prev = midiBtn.textContent;
-          midiBtn.innerText = 'Generating MIDI...';
-          midiBtn.disabled = true;
-          await ensureToneUnlocked();
-         
-          try {
-            await ensureMidi(cache);
-            const a = document.createElement('a');
-            a.className = 'btn';
-            a.download = `${nameBase}__EMPH${useDoubling ? '_DUP' : ''}_${escapeFile(prettyName)}.mid`;
-            a.href = cache.midiDataUrl;
-            a.textContent = 'Download MIDI (ready)';
-            midiBtn.replaceWith(a);
-          } catch (err) {
-            midiBtn.disabled = false;
-            midiBtn.textContent = prev;
-            noteEl.innerHTML = `<span class="error">MIDI generation failed: ${escapeHtml(err.message || String(err))}</span>`;
+        // Reuse a single Verovio toolkit instance
+        let vrvToolkit = null;
+        function ensureVerovio() {
+          if (vrvToolkit) return vrvToolkit;
+          if (!window.verovio || !window.verovio.toolkit) {
+            throw new Error('Verovio failed to load.');
           }
-        });
-
-        mp3Btn.addEventListener('click', async () => {
-          mp3Btn.innerText = 'Generating MP3...';
-          mp3Btn.disabled = true;
-          await ensureToneUnlocked();
-
-          try {
-            await ensureMidi(cache);
-            const midiData = new Midi(base64ToArrayBuffer(cache.midiBase64));
-            const mp3DataUrl = await createMp3DataUrl(midiData);
-            const a = document.createElement('a');
-            a.className = 'btn';
-            a.download = `${nameBase}__EMPH${useDoubling ? '_DUP' : ''}_${escapeFile(prettyName)}.mp3`;
-            a.href = mp3DataUrl;
-            a.textContent = 'Download MP3 (ready)';
-            mp3Btn.replaceWith(a);
-          } catch (err) {
-            noteEl.innerHTML = `<span class="error">MP3 generation failed: ${escapeHtml(err.message || String(err))}</span>`;
-          }
-        });
-      }
-    } catch (err) {
-      statusEl.innerHTML = `<span class="error">Error: ${escapeHtml(err.message || String(err))}</span>`;
-    }
-  });
-
-  // ---------- Core: create emphasized (and optionally doubled) copy ----------
-  function createEmphasizedCopy(xmlString, targetPartId, { double=false, doubleProgram=57, doubleName='Doubling' } = {}) {
-    const parser = new DOMParser();
-    const doc = parser.parseFromString(xmlString, 'application/xml');
-
-    // Helper: assign unique MIDI channels sequentially (1..16, skip 10)
-    function assignMidiChannels() {
-      const scoreParts = Array.from(doc.querySelectorAll('part-list > score-part'));
-      let ch = 1;
-      function nextCh() { ch = ch === 9 ? 11 : ch + 1; return ch; } // 10 (index 9) is drums; skip
-      for (const sp of scoreParts) {
-        const midiInsts = sp.querySelectorAll(':scope > midi-instrument');
-        midiInsts.forEach(mi => {
-          let chEl = mi.querySelector('midi-channel');
-          if (!chEl) { chEl = doc.createElement('midi-channel'); mi.appendChild(chEl); }
-          if (!chEl.textContent) chEl.textContent = String(nextCh());
-        });
-      }
-    }
-
-    // 1) Per-part MIDI volume + ensure midi-instrument present
-    doc.querySelectorAll('part-list > score-part').forEach(sp => {
-      const pid = sp.getAttribute('id') || '';
-      const vol = (pid === targetPartId) ? EMPH_VOLUME : OTHER_VOLUME;
-
-      const scoreInstr = sp.querySelectorAll(':scope > score-instrument');
-      if (scoreInstr.length) {
-        scoreInstr.forEach(si => {
-          const instId = si.getAttribute('id') || `${pid}-I1`;
-          let mi = sp.querySelector(`:scope > midi-instrument[id="${cssEscape(instId)}"]`);
-          if (!mi) {
-            mi = doc.createElement('midi-instrument');
-            mi.setAttribute('id', instId);
-            sp.appendChild(mi);
-          }
-          setOrCreate(mi, 'volume', String(vol));
-        });
-      } else {
-        let mi = sp.querySelector(':scope > midi-instrument');
-        if (!mi) {
-          mi = doc.createElement('midi-instrument');
-          mi.setAttribute('id', `${pid}-I1`);
-          sp.appendChild(mi);
-        }
-        setOrCreate(mi, 'volume', String(vol));
-      }
-    });
-
-    // 2) Insert explicit dynamic marks + <sound dynamics> at the first measure of each part
-    doc.querySelectorAll('part').forEach(part => {
-      const pid = part.getAttribute('id') || '';
-      const isEmph = (pid === targetPartId);
-      const dynMark = isEmph ? EMPH_DYNAMIC_MARK : OTHER_DYNAMIC_MARK;
-      const dynAttr = isEmph ? EMPH_DYNAMICS_ATTR : OTHER_DYNAMICS_ATTR;
-      const m1 = part.querySelector(':scope > measure');
-      if (m1) {
-        const direction = doc.createElement('direction');
-        const dtype = doc.createElement('direction-type');
-        const dynamics = doc.createElement('dynamics');
-        dynamics.appendChild(doc.createElement(dynMark)); // e.g., <fff/> or <p/>
-        dtype.appendChild(dynamics);
-        direction.appendChild(dtype);
-        const sound = doc.createElement('sound');
-        sound.setAttribute('dynamics', String(dynAttr));
-        direction.appendChild(sound);
-        m1.insertBefore(direction, m1.firstChild);
-      }
-    });
-
-    // 3) Optional doubling: clone the emphasized part as a new part with a different instrument
-    if (double) {
-      const originalPart = doc.querySelector(`part[id="${cssAttr(targetPartId)}"]`);
-      if (originalPart) {
-        // Find the matching score-part for metadata
-        const origScorePart = doc.querySelector(`part-list > score-part[id="${cssAttr(targetPartId)}"]`);
-        const partList = doc.querySelector('part-list');
-
-        // Create new score-part entry
-        const dupId = `${targetPartId}_DUP`;
-        const scorePartDup = doc.createElement('score-part');
-        scorePartDup.setAttribute('id', dupId);
-        // Part name
-        const pn = doc.createElement('part-name');
-        pn.textContent = (origScorePart?.querySelector('part-name')?.textContent?.trim() || targetPartId) + ` (${doubleName})`;
-        scorePartDup.appendChild(pn);
-        // Score-instrument + midi-instrument with program
-        const si = doc.createElement('score-instrument');
-        si.setAttribute('id', `${dupId}-I1`);
-        const iname = doc.createElement('instrument-name');
-        iname.textContent = doubleName;
-        si.appendChild(iname);
-        scorePartDup.appendChild(si);
-
-        const mi = doc.createElement('midi-instrument');
-        mi.setAttribute('id', `${dupId}-I1`);
-        setOrCreate(mi, 'midi-program', String(doubleProgram)); // GM program
-        setOrCreate(mi, 'volume', String(EMPH_VOLUME));
-        scorePartDup.appendChild(mi);
-
-        partList.appendChild(scorePartDup);
-
-        // Clone the part
-        const dupPart = originalPart.cloneNode(true);
-        dupPart.setAttribute('id', dupId);
-
-        // Update any <note><instrument id="..."/> references to point to dup instrument
-        dupPart.querySelectorAll('note > instrument[id]').forEach(inst => {
-          inst.setAttribute('id', `${dupId}-I1`);
-        });
-
-        // Make sure the doubled part also starts loud (insert dynamics at its first measure)
-        const m1 = dupPart.querySelector(':scope > measure');
-        if (m1) {
-          const direction = doc.createElement('direction');
-          const dtype = doc.createElement('direction-type');
-          const dynamics = doc.createElement('dynamics');
-          dynamics.appendChild(doc.createElement(EMPH_DYNAMIC_MARK)); // loud
-          dtype.appendChild(dynamics);
-          direction.appendChild(dtype);
-          const sound = doc.createElement('sound');
-          sound.setAttribute('dynamics', String(EMPH_DYNAMICS_ATTR));
-          direction.appendChild(sound);
-          m1.insertBefore(direction, m1.firstChild);
+          vrvToolkit = new verovio.toolkit();
+          vrvToolkit.setOptions({ inputFrom: 'xml' }); // we feed MusicXML
+          return vrvToolkit;
         }
 
-        // Insert dup part right after the original in the score
-        originalPart.insertAdjacentElement('afterend', dupPart);
-      }
-    }
+        fileInput.addEventListener('change', handleFileChange);
 
-    // 4) Assign MIDI channels so parts are independent (helps some players)
-    assignMidiChannels();
+        // ─────────────────────────────────────────────────────────────────────────────
+        // Handlers
+        // ─────────────────────────────────────────────────────────────────────────────
+        async function handleFileChange(e) {
+          resultsEl.innerHTML = '';
+          statusEl.textContent = '';
 
-    const serializer = new XMLSerializer();
-    return serializer.serializeToString(doc);
-  }
+          const file = e.target.files?.[0];
+          if (!file) return;
 
-  // ---------- MIDI generation via Verovio ----------
-  async function ensureMidi(cache) {
-    if (cache.midiDataUrl && cache.midiBase64) return cache;
-    const vrv = ensureVerovio();
-    const ok = vrv.loadData(cache.xml);
-    if (!ok) throw new Error('Verovio loadData() failed for this MusicXML');
-    const base64 = vrv.renderToMIDI();
-    if (!base64) throw new Error('Verovio renderToMIDI() returned empty');
-    cache.midiBase64 = base64;
-    cache.midiDataUrl = 'data:audio/midi;base64,' + base64;
-    return cache;
-  }
+          const nameBase = (file.name || 'score').replace(/\.(musicxml|xml|mxl)$/i, '');
+          const ext = (file.name.split('.').pop() || '').toLowerCase();
+          if (ext === 'mxl') {
+            statusEl.innerHTML =
+              'This demo supports uncompressed MusicXML (.xml / .musicxml). For .mxl, unzip first.';
+            return;
+          }
 
-  async function ensureToneUnlocked() {
-    if (Tone.context.state !== 'running') await Tone.start();
-  }
+          try {
+            const text = await file.text();
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(text, 'application/xml');
+            if (doc.querySelector('parsererror')) throw new Error('Could not parse XML');
 
-  function base64ToArrayBuffer(b64) {
-    const bin = atob(b64);
-    const bytes = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-    return bytes.buffer;
-  }
+            const root = doc.querySelector('score-partwise, score-timewise');
+            if (!root) throw new Error('Not a MusicXML (score-partwise/timewise) document');
 
-  // ---------- Tiny utils ----------
-  function setOrCreate(parent, tag, text) { let el = parent.querySelector(tag); if (!el) { el = parent.ownerDocument.createElement(tag); parent.appendChild(el); } el.textContent = text; return el; }
-  function makeDownloadUrl(text, mime) { const blob = new Blob([text], { type: mime }); return URL.createObjectURL(blob); }
-  function escapeFile(s) { return s.replace(/[^\w\-]+/g, '_'); }
-  function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
-  function cssEscape(id) { return id.replace(/(["\\#.:])/g, "\\$1"); }
-  function cssAttr(v) { return String(v).replace(/(["\\#.:])/g, "\\$1"); }
+            // Map part-id -> display name
+            const nameById = {};
+            doc.querySelectorAll('part-list > score-part').forEach((sp) => {
+              const pid = sp.getAttribute('id') || '';
+              const pname = (sp.querySelector('part-name')?.textContent || '').trim();
+              nameById[pid] = pname || pid || 'Part';
+            });
 
-async function createMp3DataUrl(midiData) {
-    const sampleRate = 44100;
-    const kbps = 256;
+            const parts = Array.from(doc.querySelectorAll('part'));
+            if (!parts.length) throw new Error('No <part> elements found');
 
-    const tailSeconds = 2.0;
-    const durationSec = midiData.duration + tailSeconds;
-    const totalFrames = Math.ceil(durationSec * sampleRate);
+            statusEl.textContent = `Loaded “${file.name}” — ${parts.length} part(s)`;
 
-    const offline = new OfflineAudioContext(2, totalFrames, sampleRate);
+            const originalXml = text;
 
-    const instCache = {
-      piano: await loadSfInstrument(offline, 'acoustic_grand_piano'),
-      trumpet: await loadSfInstrument(offline, 'trumpet'),
-    };
+            // Build one emphasized version per part
+            for (const partEl of parts) {
+              const pid = partEl.getAttribute('id') || '';
+              const prettyName = nameById[pid] || pid || 'Part';
 
-    const ROLE_GAIN = { piano: 0.95, trumpet: 0.95, drums: 0.9, other: 0.0 };
+              const emphasizedXml = createEmphasizedCopy(originalXml, pid, {
+                double: DOUBLING_ENABLED,
+                doubleProgram: DOUBLING_PROGRAM,
+                doubleName: DOUBLING_NAME,
+              });
 
-    midiData.tracks.forEach((track) => {
-      const role = classifyTrack(track);
-      const inst = instCache[role];  // undefined for 'other'
-      const baseGain = ROLE_GAIN[role] ?? 0.0;
+              const card = buildPartCard({
+                prettyName,
+                pid,
+                emphasizedXml,
+                nameBase,
+                useDoubling: DOUBLING_ENABLED,
+              });
 
-      // Skip non-piano/non-trumpet pitched tracks (but keep drums)
-      if (!inst || baseGain <= 0) return;
+              resultsEl.appendChild(card);
+            }
+          } catch (err) {
+            statusEl.innerHTML = `<span class="error">Error: ${escapeHtml(
+              err.message || String(err)
+            )}</span>`;
+          }
+        }
 
-      const trackGain = (track.volume ?? 1.0) * baseGain;
+        // ─────────────────────────────────────────────────────────────────────────────
+        // UI
+        // ─────────────────────────────────────────────────────────────────────────────
+        function buildPartCard({ prettyName, pid, emphasizedXml, nameBase, useDoubling }) {
+          const card = document.createElement('div');
+          card.className = 'card';
+          card.innerHTML = `
+            <h3>${escapeHtml(prettyName)}</h3>
+            <div class="muted">Part ID: <code>${escapeHtml(pid)}</code></div>
+            <div class="row" style="margin-top: .5rem">
+              <a class="btn primary" data-action="download-xml">Download MusicXML</a>
+              <button class="btn" data-action="midi">Generate MIDI</button>
+              <button class="btn" data-action="mp3">Generate MP3</button>
+            </div>
+            <div class="muted" style="margin-top:.5rem"></div>
+          `;
 
-      track.notes.forEach((n) => {
-        const when = n.time;
-        const dur = Math.max(0.01, n.duration);
-        const vel = (n.velocity ?? 0.8) * trackGain;
-        if (dur <= 0) return;
-        inst.play(n.midi, when, { duration: dur, gain: vel });
-      });
-    });
+          const fileStem = `${nameBase}__EMPH${useDoubling ? '_DUP' : ''}_${escapeFile(prettyName)}`;
 
-    const rendered = await offline.startRendering();
+          // Wire MusicXML download
+          const xmlA = card.querySelector('[data-action="download-xml"]');
+          xmlA.download = `${fileStem}.musicxml`;
+          xmlA.href = makeDownloadUrl(
+            emphasizedXml,
+            'application/vnd.recordare.musicxml+xml;charset=utf-8'
+          );
 
-    // Float32 -> Int16
-    const f32ToI16 = (f32) => {
-      const out = new Int16Array(f32.length);
-      for (let i = 0; i < f32.length; i++) {
-        let s = Math.max(-1, Math.min(1, f32[i]));
-        out[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
-      }
-      return out;
-    };
+          const midiBtn = card.querySelector('[data-action="midi"]');
+          const mp3Btn = card.querySelector('[data-action="mp3"]');
+          const noteEl = card.querySelector('.muted:last-child');
 
-    const left16 = f32ToI16(rendered.getChannelData(0));
-    const right16 = f32ToI16(rendered.getChannelData(1));
+          // Cache per-card assets
+          const cache = { xml: emphasizedXml, midiDataUrl: null, midiBase64: null };
 
-    const encoder = new window.lamejs.Mp3Encoder(2, sampleRate, kbps);
-    const mp3Data = [];
-    const block = 1152;
+          midiBtn.addEventListener('click', async () => {
+            if (midiBtn.disabled) return;
+            const prev = midiBtn.textContent;
+            try {
+              midiBtn.textContent = 'Generating MIDI…';
+              midiBtn.disabled = true;
+              await ensureToneUnlocked();
 
-    for (let i = 0; i < left16.length; i += block) {
-      const buf = encoder.encodeBuffer(
-        left16.subarray(i, i + block),
-        right16.subarray(i, i + block)
-      );
-      if (buf.length) mp3Data.push(buf);
-    }
-    const end = encoder.flush();
-    if (end.length) mp3Data.push(end);
+              await ensureMidi(cache);
+              const a = document.createElement('a');
+              a.className = 'btn';
+              a.download = `${fileStem}.mid`;
+              a.href = cache.midiDataUrl;
+              a.textContent = 'Download MIDI (ready)';
+              midiBtn.replaceWith(a);
+            } catch (err) {
+              midiBtn.disabled = false;
+              midiBtn.textContent = prev;
+              noteEl.innerHTML = `<span class="error">MIDI generation failed: ${escapeHtml(
+                err.message || String(err)
+              )}</span>`;
+            }
+          });
 
-    const blob = new Blob(mp3Data, { type: 'audio/mpeg' });
-    const url = URL.createObjectURL(blob);
-    return url;
-}
+          mp3Btn.addEventListener('click', async () => {
+            if (mp3Btn.disabled) return;
+            try {
+              mp3Btn.textContent = 'Generating MP3…';
+              mp3Btn.disabled = true;
+              await ensureToneUnlocked();
 
-function classifyTrack(track) {
-  const nameBits = [
-    track.name,
-    track.instrument?.name,
-    track.instrument?.family
-  ].filter(Boolean).join(' ').toLowerCase();
+              await ensureMidi(cache);
+              const midiData = new Midi(base64ToArrayBuffer(cache.midiBase64));
+              const mp3DataUrl = await createMp3DataUrl(midiData);
+              const a = document.createElement('a');
+              a.className = 'btn';
+              a.download = `${fileStem}.mp3`;
+              a.href = mp3DataUrl;
+              a.textContent = 'Download MP3 (ready)';
+              mp3Btn.replaceWith(a);
+            } catch (err) {
+              noteEl.innerHTML = `<span class="error">MP3 generation failed: ${escapeHtml(
+                err.message || String(err)
+              )}</span>`;
+            }
+          });
 
-  const prog = Number.isFinite(track.instrument?.number) ? track.instrument.number : null;
-  const channel = track.channel; // GM drums are channel 9 (0-based)
-  const isDrums = track.percussion || channel === 9;
+          return card;
+        }
 
-  if (isDrums) return 'drums';
+        // ─────────────────────────────────────────────────────────────────────────────
+        // Core: create emphasized (and optionally doubled) copy
+        // ─────────────────────────────────────────────────────────────────────────────
+        function createEmphasizedCopy(
+          xmlString,
+          targetPartId,
+          { double = false, doubleProgram = 57, doubleName = 'Doubling' } = {}
+        ) {
+          const parser = new DOMParser();
+          const doc = parser.parseFromString(xmlString, 'application/xml');
 
-  // Program-based hints (GM numbers are 0-based in tonejs/midi):
-  // Pianos 0..7, Trumpet 56
-  const isPianoProg = prog !== null && prog >= 0 && prog <= 7;
-  const isTrumpetProg = prog === 56;
+          // 1) Per-part MIDI volume + ensure midi-instrument present
+          doc.querySelectorAll('part-list > score-part').forEach((sp) => {
+            const pid = sp.getAttribute('id') || '';
+            const vol = pid === targetPartId ? EMPH_VOLUME : OTHER_VOLUME;
 
-  // Name-based hints (MuseScore often uses labels like "Piano", "Pno.", "Trumpet in Bb")
-  const pianoName = /\b(piano|pno\.?|grand|keys?)\b/i.test(nameBits);
-  const trumpetName = /\b(trumpet|tpt\.?)\b/i.test(nameBits);
+            const scoreInstr = sp.querySelectorAll(':scope > score-instrument');
+            if (scoreInstr.length) {
+              scoreInstr.forEach((si) => {
+                const instId = si.getAttribute('id') || `${pid}-I1`;
+                let mi = sp.querySelector(`:scope > midi-instrument[id="${cssAttr(instId)}"]`);
+                if (!mi) {
+                  mi = doc.createElement('midi-instrument');
+                  mi.setAttribute('id', instId);
+                  sp.appendChild(mi);
+                }
+                setOrCreate(mi, 'volume', String(vol));
+              });
+            } else {
+              let mi = sp.querySelector(':scope > midi-instrument');
+              if (!mi) {
+                mi = doc.createElement('midi-instrument');
+                mi.setAttribute('id', `${pid}-I1`);
+                sp.appendChild(mi);
+              }
+              setOrCreate(mi, 'volume', String(vol));
+            }
+          });
 
-  if (isPianoProg || pianoName) return 'piano';
-  if (isTrumpetProg || trumpetName) return 'trumpet';
+          // 2) Insert explicit dynamic marks + <sound dynamics> at the first measure of each part
+          doc.querySelectorAll('part').forEach((part) => {
+            const pid = part.getAttribute('id') || '';
+            const isEmph = pid === targetPartId;
+            const dynMark = isEmph ? EMPH_DYNAMIC_MARK : OTHER_DYNAMIC_MARK;
+            const dynAttr = isEmph ? EMPH_DYNAMICS_ATTR : OTHER_DYNAMICS_ATTR;
+            const m1 = part.querySelector(':scope > measure');
+            if (m1) {
+              const direction = doc.createElement('direction');
+              const dtype = doc.createElement('direction-type');
+              const dynamics = doc.createElement('dynamics');
+              dynamics.appendChild(doc.createElement(dynMark)); // e.g., <fff/> or <p/>
+              dtype.appendChild(dynamics);
+              direction.appendChild(dtype);
+              const sound = doc.createElement('sound');
+              sound.setAttribute('dynamics', String(dynAttr));
+              direction.appendChild(sound);
+              m1.insertBefore(direction, m1.firstChild);
+            }
+          });
 
-  return 'other';
-}
+          // 3) Optional doubling: clone the emphasized part as a new part with a different instrument
+          if (double) {
+            const originalPart = doc.querySelector(`part[id="${cssAttr(targetPartId)}"]`);
+            if (originalPart) {
+              const origScorePart = doc.querySelector(
+                `part-list > score-part[id="${cssAttr(targetPartId)}"]`
+              );
+              const partList = doc.querySelector('part-list');
 
-// Create (or fetch) a SoundFont instrument by name
-async function loadSfInstrument(ctx, name) {
-  // Valid GM names for FluidR3_GM include 'acoustic_grand_piano', 'trumpet', 'percussion'
-  return window.Soundfont.instrument(ctx, name, {
-    soundfont: 'FluidR3_GM',
-    gain: 0.9
-  });
-}
-})();
-</script>
-</body>
+              const dupId = `${targetPartId}_DUP`;
+
+              // Create new score-part entry
+              const scorePartDup = doc.createElement('score-part');
+              scorePartDup.setAttribute('id', dupId);
+
+              const pn = doc.createElement('part-name');
+              pn.textContent =
+                (origScorePart?.querySelector('part-name')?.textContent?.trim() || targetPartId) +
+                ` (${doubleName})`;
+              scorePartDup.appendChild(pn);
+
+              // Score-instrument + midi-instrument with program
+              const si = doc.createElement('score-instrument');
+              si.setAttribute('id', `${dupId}-I1`);
+              const iname = doc.createElement('instrument-name');
+              iname.textContent = doubleName;
+              si.appendChild(iname);
+              scorePartDup.appendChild(si);
+
+              const mi = doc.createElement('midi-instrument');
+              mi.setAttribute('id', `${dupId}-I1`);
+              setOrCreate(mi, 'midi-program', String(doubleProgram));
+              setOrCreate(mi, 'volume', String(EMPH_VOLUME));
+              scorePartDup.appendChild(mi);
+
+              partList.appendChild(scorePartDup);
+
+              // Clone the part
+              const dupPart = originalPart.cloneNode(true);
+              dupPart.setAttribute('id', dupId);
+
+              // Update any <note><instrument id="..."/> references to point to dup instrument
+              dupPart.querySelectorAll('note > instrument[id]').forEach((inst) => {
+                inst.setAttribute('id', `${dupId}-I1`);
+              });
+
+              // Make sure the doubled part also starts loud
+              const m1 = dupPart.querySelector(':scope > measure');
+              if (m1) {
+                const direction = doc.createElement('direction');
+                const dtype = doc.createElement('direction-type');
+                const dynamics = doc.createElement('dynamics');
+                dynamics.appendChild(doc.createElement(EMPH_DYNAMIC_MARK));
+                dtype.appendChild(dynamics);
+                direction.appendChild(dtype);
+                const sound = doc.createElement('sound');
+                sound.setAttribute('dynamics', String(EMPH_DYNAMICS_ATTR));
+                direction.appendChild(sound);
+                m1.insertBefore(direction, m1.firstChild);
+              }
+
+              // Insert dup part right after the original in the score
+              originalPart.insertAdjacentElement('afterend', dupPart);
+            }
+          }
+
+          // 4) Assign MIDI channels so parts are independent (helps some players)
+          assignMidiChannels(doc);
+
+          const serializer = new XMLSerializer();
+          return serializer.serializeToString(doc);
+        }
+
+        // Helper: assign unique MIDI channels sequentially (1..16, skip 10)
+        function assignMidiChannels(doc) {
+          const scoreParts = Array.from(doc.querySelectorAll('part-list > score-part'));
+          let ch = 0; // 1-based; reserve 10 for drums
+          function nextCh() {
+            ch += 1;
+            if (ch === 10) ch = 11;
+            if (ch > 16) ch = 1; // wrap if necessary
+            return ch;
+          }
+          for (const sp of scoreParts) {
+            const midiInsts = sp.querySelectorAll(':scope > midi-instrument');
+            midiInsts.forEach((mi) => {
+              let chEl = mi.querySelector('midi-channel');
+              if (!chEl) {
+                chEl = doc.createElement('midi-channel');
+                mi.appendChild(chEl);
+              }
+              if (!chEl.textContent) chEl.textContent = String(nextCh());
+            });
+          }
+        }
+
+        // ─────────────────────────────────────────────────────────────────────────────
+        // MIDI generation via Verovio
+        // ─────────────────────────────────────────────────────────────────────────────
+        async function ensureMidi(cache) {
+          if (cache.midiDataUrl && cache.midiBase64) return cache;
+          const vrv = ensureVerovio();
+          const ok = vrv.loadData(cache.xml);
+          if (!ok) throw new Error('Verovio loadData() failed for this MusicXML');
+          const base64 = vrv.renderToMIDI();
+          if (!base64) throw new Error('Verovio renderToMIDI() returned empty');
+          cache.midiBase64 = base64;
+          cache.midiDataUrl = 'data:audio/midi;base64,' + base64;
+          return cache;
+        }
+
+        async function ensureToneUnlocked() {
+          if (Tone?.context?.state !== 'running') await Tone.start();
+        }
+
+        function base64ToArrayBuffer(b64) {
+          const bin = atob(b64);
+          const bytes = new Uint8Array(bin.length);
+          for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+          return bytes.buffer;
+        }
+
+        // ─────────────────────────────────────────────────────────────────────────────
+        // MP3 rendering (OfflineAudioContext + SoundFont + lamejs)
+        // ─────────────────────────────────────────────────────────────────────────────
+        async function createMp3DataUrl(midiData) {
+          const sampleRate = 44100;
+          const kbps = 256;
+
+          const tailSeconds = 2.0;
+          const durationSec = midiData.duration + tailSeconds;
+          const totalFrames = Math.ceil(durationSec * sampleRate);
+
+          const offline = new OfflineAudioContext(2, totalFrames, sampleRate);
+
+          const instCache = {
+            piano: await loadSfInstrument(offline, 'acoustic_grand_piano'),
+            trumpet: await loadSfInstrument(offline, 'trumpet'),
+            // percussion can be added if you want drums rendered
+          };
+
+          const ROLE_GAIN = { piano: 0.95, trumpet: 0.95, drums: 0.9, other: 0.0 };
+
+          midiData.tracks.forEach((track) => {
+            const role = classifyTrack(track);
+            const inst = instCache[role]; // undefined for 'other'
+            const baseGain = ROLE_GAIN[role] ?? 0.0;
+
+            // Skip non-piano/non-trumpet pitched tracks (but keep drums if added later)
+            if (!inst || baseGain <= 0) return;
+
+            const trackGain = (track.volume ?? 1.0) * baseGain;
+
+            track.notes.forEach((n) => {
+              const when = n.time;
+              const dur = Math.max(0.01, n.duration);
+              const vel = (n.velocity ?? 0.8) * trackGain;
+              if (dur <= 0) return;
+              inst.play(n.midi, when, { duration: dur, gain: vel });
+            });
+          });
+
+          const rendered = await offline.startRendering();
+
+          // Float32 -> Int16
+          const f32ToI16 = (f32) => {
+            const out = new Int16Array(f32.length);
+            for (let i = 0; i < f32.length; i++) {
+              let s = Math.max(-1, Math.min(1, f32[i]));
+              out[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+            }
+            return out;
+          };
+
+          const left16 = f32ToI16(rendered.getChannelData(0));
+          const right16 = f32ToI16(rendered.getChannelData(1));
+
+          const encoder = new window.lamejs.Mp3Encoder(2, sampleRate, kbps);
+          const mp3Data = [];
+          const block = 1152;
+
+          for (let i = 0; i < left16.length; i += block) {
+            const buf = encoder.encodeBuffer(
+              left16.subarray(i, i + block),
+              right16.subarray(i, i + block)
+            );
+            if (buf.length) mp3Data.push(buf);
+          }
+          const end = encoder.flush();
+          if (end.length) mp3Data.push(end);
+
+          const blob = new Blob(mp3Data, { type: 'audio/mpeg' });
+          return URL.createObjectURL(blob);
+        }
+
+        function classifyTrack(track) {
+          const nameBits = [track.name, track.instrument?.name, track.instrument?.family]
+            .filter(Boolean)
+            .join(' ')
+            .toLowerCase();
+
+          const prog = Number.isFinite(track.instrument?.number)
+            ? track.instrument.number
+            : null; // 0-based
+          const channel = track.channel; // GM drums are channel 9 (0-based)
+          const isDrums = track.percussion || channel === 9;
+
+          if (isDrums) return 'drums';
+
+          // Program-based hints (GM numbers are 0-based in @tonejs/midi):
+          const isPianoProg = prog !== null && prog >= 0 && prog <= 7; // 0..7
+          const isTrumpetProg = prog === 56; // 56
+
+          // Name-based hints (MuseScore often uses labels like "Piano", "Pno.", "Trumpet in Bb")
+          const pianoName = /\b(piano|pno\.?|grand|keys?)\b/i.test(nameBits);
+          const trumpetName = /\b(trumpet|tpt\.?)\b/i.test(nameBits);
+
+          if (isPianoProg || pianoName) return 'piano';
+          if (isTrumpetProg || trumpetName) return 'trumpet';
+
+          return 'other';
+        }
+
+        // Create (or fetch) a SoundFont instrument by name
+        async function loadSfInstrument(ctx, name) {
+          // Valid GM names for FluidR3_GM include 'acoustic_grand_piano', 'trumpet', 'percussion'
+          return window.Soundfont.instrument(ctx, name, {
+            soundfont: 'FluidR3_GM',
+            gain: 0.9,
+          });
+        }
+
+        // ─────────────────────────────────────────────────────────────────────────────
+        // Tiny utils
+        // ─────────────────────────────────────────────────────────────────────────────
+        function setOrCreate(parent, tag, text) {
+          let el = parent.querySelector(tag);
+          if (!el) {
+            el = parent.ownerDocument.createElement(tag);
+            parent.appendChild(el);
+          }
+          el.textContent = text;
+          return el;
+        }
+
+        function makeDownloadUrl(text, mime) {
+          const blob = new Blob([text], { type: mime });
+          return URL.createObjectURL(blob);
+        }
+
+        function escapeFile(s) {
+          return s.replace(/[^\w\-]+/g, '_');
+        }
+
+        function escapeHtml(s) {
+          return String(s).replace(/[&<>"']/g, (c) =>
+            ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])
+          );
+        }
+
+        function cssAttr(v) {
+          // Escape minimal set for attribute selector usage
+          return String(v).replace(/(["\\#.:])/g, '\\$1');
+        }
+      })();
+    </script>
+  </body>
 </html>
-
